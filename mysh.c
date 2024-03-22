@@ -27,7 +27,7 @@ int contains_more_than_one_space(const char *str)
     return 0;
 }
 
-char **splitStringByPipe(const char *input)
+char **splitStringByVal(char *input, char* delimiter)
 {
     char **result = malloc(3 * sizeof(char *));
     if (result == NULL)
@@ -36,7 +36,7 @@ char **splitStringByPipe(const char *input)
         return NULL;
     }
 
-    const char *delimiterPosition = strchr(input, '|');
+    const char *delimiterPosition = strchr(input, delimiter);
 
     size_t firstLength = delimiterPosition - input;
     result[0] = malloc(firstLength + 1); 
@@ -103,11 +103,12 @@ char *emulate_which(char *file_name)
     return NULL;
 }
 
-void executeCommand(const char *cmd, int interactive)
+char *executeCommand(const char *cmd, int interactive)
 {
     char *tempCmd = strdup(cmd);
     tempCmd[strcspn(tempCmd, "\n")] = 0;
     char *first = get_first(tempCmd);
+    char *result = NULL;
 
     if (strcmp(first, "exit") == 0)
     {
@@ -117,10 +118,13 @@ void executeCommand(const char *cmd, int interactive)
 
         if (*args)
         {
-            printf("Provided Arguments: %s\n", args);
+            result = strdup(args);
+        }
+        else
+        {
+            result = strdup("Exiting my shell.\n");
         }
         free(tempCmd);
-        printf("Exiting my shell.\n");
         exit(0);
     }
     else if (strcmp("cd", first) == 0)
@@ -130,7 +134,10 @@ void executeCommand(const char *cmd, int interactive)
             path++;
 
         if (chdir(path) != 0)
-            perror("chdir failed");
+        {
+            // If chdir failed, return an error message
+            result = strdup("chdir failed");
+        }
     }
     else if (strcmp("which", first) == 0)
     {
@@ -140,18 +147,20 @@ void executeCommand(const char *cmd, int interactive)
         char *res = emulate_which(path);
         if (res)
         {
-            printf("%s", res);
+            result = strdup(res);
         }
     }
     else
     {
         system(tempCmd);
     }
+
     free(tempCmd);
     free(first);
-    if (interactive)
-        interaction();
+
+    return result;
 }
+
 
 void process_wildcard(char *pattern, int interactive)
 {
@@ -186,16 +195,21 @@ void process_wildcard(char *pattern, int interactive)
 
 void process_pipe(char *cmd, int interactive)
 {
-    char **pipes = splitStringByPipe(cmd);
-    int fd[2]; //file descriptors for pipes
-    int i = 0;
+    // char **pipes = splitStringByVal(cmd, "|");
+    // int fd[2]; 
+    // int i = 0;
 
-    while (pipes[i] != 0)
-        [
+    // while (pipes[i] != 0)
+    //     [
 
-            i += 1;
-        ]
+    //         i += 1;
+    //     ]
+    printf("handling pipes...");
 }
+
+// void process_redirects(char* cmd, char* delim, int interactive){
+//     char** redirects = splitStringByVal(cmd, delim);
+// }
 
 void processInput(int fd, int interactive)
 {
@@ -208,16 +222,25 @@ void processInput(int fd, int interactive)
         if (strchr(cmd, '*') != NULL)
             process_wildcard(cmd, interactive);
         else if (strchr(cmd, '|') != NULL)
-            process_pipe(cmd, interactive);
+            // process_pipe(cmd, interactive);
+            printf("piping...");
+        else if(strchr(cmd, '<') != NULL || strchr(cmd, '>') != NULL){
+            char* delim = (strchr(cmd, '<') != NULL) ? "<" : ">";
+            // process_redirects(cmd, interactive, delim);
+        }
         else
         {
             while (cmd != NULL)
             {
-                executeCommand(cmd, interactive);
+                char* command_res = executeCommand(cmd, interactive);
+                if(command_res) printf("%s\n", command_res);
                 cmd = strtok(NULL, "\n");
             }
+            
         }
+        if (interactive)interaction();
     }
+    
 }
 
 int main(int argc, char *argv[])
