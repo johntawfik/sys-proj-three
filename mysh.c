@@ -4,6 +4,9 @@
 #include <string.h>
 #include <ctype.h>
 #include <glob.h>
+#include <fcntl.h>
+#include <sys/types.h>
+#include <sys/wait.h>
 
 #define BUFFER_SIZE 1024
 char *dirs[] = {"/usr/local/bin", "/usr/bin", "/bin"};
@@ -62,6 +65,18 @@ char **splitStringByVal(char *input, char* delimiter)
     result[2] = NULL;
 
     return result;
+}
+
+void removeAllWhitespaces(char* source) {
+    char* i = source;
+    char* j = source;
+    while (*j != '\0') {
+        *i = *j++;
+        if (!isspace(*i)) {
+            i++;
+        }
+    }
+    *i = '\0';
 }
 
 char *get_first(const char *input)
@@ -208,15 +223,52 @@ void process_pipe(char *cmd, int interactive)
     printf("handling pipes...");
 }
 
+void process_stdout(char* file_to_redirect, char* exec_cmd){
+    int fd = open(file_to_redirect, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+
+    pid_t pid = fork();
+
+    if(pid < 0) {
+        perror("dumbass");
+        exit(EXIT_FAILURE);
+    }
+
+    if (pid == 0) {
+        dup2(fd, STDOUT_FILENO);
+        execlp(exec_cmd, exec_cmd, NULL);
+    } else{
+        close(fd);
+        wait(NULL);
+    }
+}
+
+void process_stdin(char* file_to_redirect, char* exec_cmd){
+    int in = open(file_to_redirect, O_RDONLY);
+    if(in < 0){
+        perror("error opening file");
+        exit(  EXIT_FAILURE);
+    }
+    dup2(in, STDIN_FILENO);
+
+    execlp(exec_cmd, exec_cmd, NULL);
+
+    close(in);
+}
+
+
 /*
 foo < bar baz redirect std input of foo baz to bar
 quux *.txt > spam has globbing of *.txt and quux to spam
 */
 void process_redirects(char* cmd, char* delim, int interactive){
     char** redirects = splitStringByVal(cmd, delim);
+    removeAllWhitespaces(redirects[1]);
     char* file_to_redirect = get_first(redirects[1]);
-
+    char* exec_cmd = get_first(cmd);
+    if(strchr(delim, '>') != NULL) process_stdout(file_to_redirect, exec_cmd);
+    else process_stdin(file_to_redirect, exec_cmd);
 }
+
 
 void processInput(int fd, int interactive)
 {
