@@ -36,7 +36,7 @@ char **splitStringByVal(char *input, char* delimiter)
         return NULL;
     }
 
-    const char *delimiterPosition = strchr(input, delimiter);
+    char *delimiterPosition = strchr(input, *delimiter);
 
     size_t firstLength = delimiterPosition - input;
     result[0] = malloc(firstLength + 1); 
@@ -124,6 +124,7 @@ char *executeCommand(const char *cmd, int interactive)
         {
             result = strdup("Exiting my shell.\n");
         }
+        printf("%s\n", result);
         free(tempCmd);
         exit(0);
     }
@@ -207,9 +208,15 @@ void process_pipe(char *cmd, int interactive)
     printf("handling pipes...");
 }
 
-// void process_redirects(char* cmd, char* delim, int interactive){
-//     char** redirects = splitStringByVal(cmd, delim);
-// }
+/*
+foo < bar baz redirect std input of foo baz to bar
+quux *.txt > spam has globbing of *.txt and quux to spam
+*/
+void process_redirects(char* cmd, char* delim, int interactive){
+    char** redirects = splitStringByVal(cmd, delim);
+    char* file_to_redirect = get_first(redirects[1]);
+
+}
 
 void processInput(int fd, int interactive)
 {
@@ -226,7 +233,7 @@ void processInput(int fd, int interactive)
             printf("piping...");
         else if(strchr(cmd, '<') != NULL || strchr(cmd, '>') != NULL){
             char* delim = (strchr(cmd, '<') != NULL) ? "<" : ">";
-            // process_redirects(cmd, interactive, delim);
+            process_redirects(cmd, delim, interactive);
         }
         else
         {
