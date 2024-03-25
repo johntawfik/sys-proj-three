@@ -120,6 +120,7 @@ char *emulate_which(char *file_name)
 
 char *executeCommand(const char *cmd, int interactive)
 {
+    printf("%s\n", cmd);
     char *tempCmd = strdup(cmd);
     tempCmd[strcspn(tempCmd, "\n")] = 0;
     char *first = get_first(tempCmd);
@@ -181,6 +182,7 @@ char *executeCommand(const char *cmd, int interactive)
 void process_wildcard(char *pattern, int interactive)
 {
     char *initial_part = get_first(pattern);
+    printf("%s\n", pattern);
     const char *second_part = pattern + strlen(initial_part);
     while (*second_part != '\0' && isspace(*second_part))
         second_part++;
@@ -196,6 +198,7 @@ void process_wildcard(char *pattern, int interactive)
             if (full_command)
             {
                 sprintf(full_command, "%s %s", initial_part, glob_result.gl_pathv[i]);
+                printf("%s\n command", full_command);
                 executeCommand(full_command, interactive);
                 free(full_command);
             }
@@ -246,14 +249,23 @@ void process_stdin(char* file_to_redirect, char* exec_cmd){
     int in = open(file_to_redirect, O_RDONLY);
     if(in < 0){
         perror("error opening file");
-        exit(  EXIT_FAILURE);
+        return;  
     }
-    dup2(in, STDIN_FILENO);
 
-    execlp(exec_cmd, exec_cmd, NULL);
-
-    close(in);
+    pid_t pid = fork();
+    if(pid == 0) {  
+        dup2(in, STDIN_FILENO);
+        execlp(exec_cmd, exec_cmd, NULL);
+        perror("execlp");  
+        exit(EXIT_FAILURE);
+    } else if(pid > 0) {  
+        wait(NULL);  
+        close(in);
+    } else {
+        perror("fork");  
+    }
 }
+
 
 
 /*
