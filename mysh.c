@@ -31,6 +31,18 @@ int contains_more_than_one_space(const char *str)
     return 0;
 }
 
+char* construct_exec_path(char* exec){
+    for(int i = 0; i < 3; i++){
+        char* exec_path = malloc(strlen(dirs[i]) + strlen(exec) + 2);
+        strcpy(exec_path, dirs[i]);
+        strcat(exec_path, "/");
+        strcat(exec_path, exec);
+        printf("%s\n", exec_path);
+        if(access(exec_path, X_OK) == 0) return exec_path;
+    }
+    return NULL; 
+}
+
 char **splitStringByVal(char *input, char* delimiter)
 {
     char **result = malloc(3 * sizeof(char *));
@@ -300,6 +312,13 @@ void process_stdout(char* file_to_redirect, char* exec_cmd){
     }
     args[arg_count] = NULL; 
 
+    char* exec_path = construct_exec_path(args[0]);
+    if(exec_path == NULL){
+        printf("Improper executable");
+        close(fd);
+        exit(EXIT_FAILURE);
+    }
+
     pid_t pid = fork();
 
     if (pid < 0) {
@@ -313,7 +332,7 @@ void process_stdout(char* file_to_redirect, char* exec_cmd){
         dup2(fd, STDOUT_FILENO); 
         close(fd); 
 
-        execvp(args[0], args); 
+        execv(exec_path, args); 
 
         perror("execvp failed");
         exit(EXIT_FAILURE);
@@ -322,6 +341,7 @@ void process_stdout(char* file_to_redirect, char* exec_cmd){
         wait(NULL); 
 
         free(cmd_copy); 
+        free(exec_path);
     }
 }
 
@@ -351,12 +371,19 @@ void process_stdin(char* file_to_redirect, char* exec_cmd) {
     }
     args[arg_count] = NULL; 
 
+    char* exec_path = construct_exec_path(args[0]);
+    if(exec_path == NULL){
+        printf("Improper executable");
+        close(in);
+        exit(EXIT_FAILURE);
+    }
+
     pid_t pid = fork();
     if (pid == 0) {
         dup2(in, STDIN_FILENO); 
         close(in); 
 
-        execvp(args[0], args); 
+        execvp(exec_path, args); 
 
         perror("execvp");
         exit(EXIT_FAILURE);
@@ -364,6 +391,7 @@ void process_stdin(char* file_to_redirect, char* exec_cmd) {
         wait(NULL); 
         close(in); 
         free(cmd_copy); 
+        free(exec_path);
     } else {
         perror("fork");
     }
