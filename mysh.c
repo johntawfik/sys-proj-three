@@ -273,18 +273,77 @@ char* process_wildcard(const char *command) {
     return result; 
 }
 
+// void getCommandByPipe(char *cmd, char **cmd1, char **cmd2) {
+//     char **pipes = splitStringByVal(cmd, "|");
+//     if (pipes != NULL) {
+//         cmd1 = cmd;
+//         cmd2 = pipes + 1;
+//     }
+// }
+
+
 void process_pipe(char *cmd, int interactive)
 {
-    // char **pipes = splitStringByVal(cmd, "|");
-    // int fd[2]; 
-    // int i = 0;
 
-    // while (pipes[i] != 0)
-    //     [
+    char **pipes = splitStringByVal(cmd, "|");
+    char **cmd1, *cmd2;
+    int pipefd[2];
 
-    //         i += 1;
-    //     ]
-    printf("handling pipes...");
+    
+
+    
+    pid_t pid1, pid2;
+
+    getCommandByPipe(cmd, &cmd1, &cmd2);
+
+    
+
+    if (pipe(pipefd) == -1) {
+        perror("pipe");
+        exit(EXIT_FAILURE);
+    }
+    char *args[MAX_ARGS];
+
+    char* exec_path = construct_exec_path(args[0]);
+    // if(exec_path == NULL){
+    //     printf("Improper executable");
+    //     close();
+    //     exit(EXIT_FAILURE);
+    // }
+    // fork to execute first command
+
+    
+    if((pid1 = fork()) == 0) {
+        dup2(pipefd[1], STDOUT_FILENO);
+        close(pipefd[0]);
+        close(pipefd[1]);
+
+        // char *args[MAX_ARGS];
+        executeCommand(cmd1, interactive);
+        execv(exec_path, args);
+        perror("execv cmd 1");
+        exit(EXIT_FAILURE);
+    }
+
+    // fork to execute second command 
+    if((pid1 = fork()) == 0) {
+        dup2(pipefd[1], STDOUT_FILENO);
+        close(pipefd[0]);
+        close(pipefd[1]);
+
+        // char *args[MAX_ARGS];
+        executeCommand(cmd2, interactive);
+        execv(exec_path, args);
+        perror("execv cmd 1");
+        exit(EXIT_FAILURE);
+    }
+
+    
+    close(pipefd[0]); // Close both ends in the parent
+    close(pipefd[1]);
+    waitpid(pid1, NULL, 0); // Wait for both child processes
+    waitpid(pid2, NULL, 0);
+    
 }
 
 void process_stdout(char* file_to_redirect, char* exec_cmd){
@@ -428,8 +487,8 @@ void processInput(int fd, int interactive)
         } 
 
         if (strchr(cmd, '|') != NULL)
-            // process_pipe(cmd, interactive);
-            printf("piping...");
+            process_pipe(cmd, interactive);
+            
         else if(strchr(cmd, '<') != NULL || strchr(cmd, '>') != NULL){
             char* delim = (strchr(cmd, '<') != NULL) ? "<" : ">";
             process_redirects(cmd, delim, interactive);
