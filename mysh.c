@@ -7,6 +7,7 @@
 #include <fcntl.h>
 #include <sys/types.h>
 #include <sys/wait.h>
+#include "queue.h"
 
 #define BUFFER_SIZE 1024
 #define SUCCESS 1
@@ -402,152 +403,103 @@ void process_pipe(char *cmd)
     waitpid(pid2, NULL, 0);
 }
 
-void process_stdout(char *file_to_redirect, char *exec_cmd)
-{
-    int fd = open(file_to_redirect, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-    if (fd < 0)
-    {
-        perror("Error opening file");
-        prev_status = FAIL;
-    }
-
-    char *args[MAX_ARGS];
-    char *token;
-    int arg_count = 0;
-
-    char *cmd_copy = strdup(exec_cmd);
-    if (!cmd_copy)
-    {
-        perror("Failed to duplicate exec_cmd");
-        close(fd);
-        prev_status = FAIL;
-    }
-
-    token = strtok(cmd_copy, " ");
-    while (token != NULL && arg_count < MAX_ARGS - 1)
-    {
-        args[arg_count++] = token;
-        token = strtok(NULL, " ");
-    }
-    args[arg_count] = NULL;
-
-    char *exec_path = construct_exec_path(args[0]);
-    if (exec_path == NULL)
-    {
-        printf("Improper executable");
-        close(fd);
-        prev_status = 0;
-    }
-
-    pid_t pid = fork();
-
-    if (pid < 0)
-    {
-        perror("Fork failed");
-        free(cmd_copy);
-        close(fd);
-        prev_status = 0;
-    }
-
-    if (pid == 0)
-    {
-        dup2(fd, STDOUT_FILENO);
-        close(fd);
-
-        if(execv(exec_path, args) == -1) prev_status = FAIL;
-        else prev_status = SUCCESS;
-        
-    }
-    else
-    {
-        close(fd);
-        wait(NULL);
-        free(cmd_copy);
-        free(exec_path);
-        prev_status = SUCCESS;
-    }
-}
-
-void process_stdin(char *file_to_redirect, char *exec_cmd)
-{
-    int in = open(file_to_redirect, O_RDONLY);
-    if (in < 0)
-    {
-        perror("error opening file");
-        prev_status = 0;
-        return;
-    }
-
-    char *args[MAX_ARGS];
-    char *token;
-    int arg_count = 0;
-
-    char *cmd_copy = strdup(exec_cmd);
-    if (!cmd_copy)
-    {
-        perror("Failed to duplicate exec_cmd");
-        close(in);
-        prev_status = 0;
-        return;
-    }
-
-    token = strtok(cmd_copy, " ");
-    while (token != NULL && arg_count < MAX_ARGS - 1)
-    {
-        args[arg_count++] = token;
-        token = strtok(NULL, " ");
-    }
-    args[arg_count] = NULL;
-
-    char *exec_path = construct_exec_path(args[0]);
-    if (exec_path == NULL)
-    {
-        printf("Improper executable");
-        close(in);
-        prev_status = 0;
-    }
-
-    pid_t pid = fork();
-    if (pid == 0)
-    {
-        dup2(in, STDIN_FILENO);
-        close(in);
-
-        if (execv(exec_path, args) == -1) prev_status = FAIL;
-        else prev_status = SUCCESS;
-    }
-    else if (pid > 0)
-    {
-        wait(NULL);
-        close(in);
-        free(cmd_copy);
-        free(exec_path);
-        prev_status = SUCCESS;
-    }
-    else
-    {
-        perror("fork"); 
-        prev_status = FAIL;
-    }
-}
-
 /*
 foo < bar baz redirect std input of foo baz to bar
 quux *.txt > spam has globbing of *.txt and quux to spam
 */
-void process_redirects(char *cmd, char *delim)
-{
-    char **redirects = splitStringByVal(cmd, delim);
-    removeAllWhitespaces(redirects[1]);
-    char *file_to_redirect = get_first(redirects[1]);
-    char *exec_cmd = get_string_before_char(cmd, *delim);
-    if (strchr(delim, '>') != NULL)
-        process_stdout(file_to_redirect, exec_cmd);
-    else
-        process_stdin(file_to_redirect, exec_cmd);
-}
+void process_redirects(char *cmd) {
+    struct Queue *inputQueue = createQueue(10);
+    struct Queue *outputQueue = createQueue(10);
 
-void processInput(char *cmd, int interactive)
+    // Tokenize and process the command
+    char *token = strtok(cmd, " ");
+    while (token != NULL) {
+        if (strcmp(token, "<") == 0) {
+            token = strtok(NULL, " ");
+            enqueue(inputQueue, token);
+        } else if (strcmp(token, ">") == 0) {
+            token = strtok(NULL, " ");
+            enqueue(outputQueue, token);
+        }
+        token = strtok(NULL, " ");
+    }
+
+    int inFD = -1, outFD = -1; // File descriptors for input and output files
+    char *lastInputFile = NULL;
+    char *lastOutputFile = NULL;
+
+    // Handle the last input redirection
+    while (!isEmpty(inputQueue)) {
+        if (lastInputFile) free(lastInputFile);
+        lastInputFile = dequeue(inputQueue);
+    }
+    if (lastInputFile) {
+        inFD = open(lastInputFile, O_RDONLY);
+        if (inFD < 0) {
+            perror("Failed to open input file");
+            exit(EXIT_FAILURE);
+        }
+    }
+
+    // Handle the last output redirection
+    while (!isEmpty(outputQueue)) {
+        if (lastOutputFile) free(lastOutputFile);
+        lastOutputFile = dequeue(outputQueue);
+    }
+    if (lastOutputFile) {
+        outFD = open(lastOutputFile, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if (outFD < 0) {
+            perror("Failed to open output file");
+            exit(EXIT_FAILURE);
+        }
+    }
+
+    // Fork and execute the command with redirections
+    pid_t pid = fork();
+    if (pid == 0) { // Child process
+        if (inFD >= 0) {
+            dup2(inFD, STDIN_FILENO);
+            close(inFD);
+        }
+        if (outFD >= 0) {
+            dup2(outFD, STDOUT_FILENO);
+            close(outFD);
+        }
+
+        // Prepare for execv
+        char *args[MAX_ARGS]; // Adjust size as needed
+        int arg_count = 0;
+        args[arg_count++] = strtok(cmd, " "); // First token is the command
+        while ((token = strtok(NULL, " ")) != NULL && arg_count < MAX_ARGS) {
+            args[arg_count++] = token; // Populate args with command arguments
+        }
+        args[arg_count] = NULL; // Null-terminate the argument list
+
+        char *exec_path = construct_exec_path(args[0]); // Find the full path to the executable
+        if (!exec_path) {
+            perror("Executable not found");
+            exit(EXIT_FAILURE);
+        }
+
+        execv(exec_path, args); // Execute the command
+        perror("execv failed"); // execv only returns on failure
+        exit(EXIT_FAILURE);
+    } else if (pid > 0) { // Parent process
+        // Close file descriptors in the parent process, if they were opened
+        if (inFD >= 0) close(inFD);
+        if (outFD >= 0) close(outFD);
+
+        wait(NULL); // Wait for child process to finish
+    } else {
+        perror("Fork failed");
+        exit(EXIT_FAILURE);
+    }
+
+    // Cleanup
+    if (lastInputFile) free(lastInputFile);
+    if (lastOutputFile) free(lastOutputFile);
+}
+void processInput(char *cmd)
 {
     if (strchr(cmd, '*') != NULL)
     {
@@ -574,8 +526,7 @@ void processInput(char *cmd, int interactive)
     }
     else if (strchr(cmd, '<') != NULL || strchr(cmd, '>') != NULL)
     {
-        char *delim = (strchr(cmd, '<') != NULL) ? "<" : ">";
-        process_redirects(cmd, delim);
+        process_redirects(cmd);
     }
     else
     {
@@ -600,7 +551,7 @@ void readAndProcessInput(int fd, int interactive)
 
         while (cmd != NULL)
         {
-            processInput(cmd, interactive);
+            processInput(cmd);
             cmd = strtok(NULL, "\n");
             if (interactive)
                 interaction();
