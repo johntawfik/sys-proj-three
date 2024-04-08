@@ -350,7 +350,7 @@ void process_pipe(char *cmd) {
     // Create a pipe
     if (pipe(pipefd) == -1) {
         perror("pipe failed");
-        exit(EXIT_FAILURE); 
+        prev_status = FAIL;
     }
 
     
@@ -362,11 +362,13 @@ void process_pipe(char *cmd) {
         
         char* args[MAX_ARGS];
         parse_arguments(cmd1, args); 
-        char* exec_path = construct_exec_path(args[0]);
+        char *exec_path = strchr(args[0], '/') ? args[0] : construct_exec_path(args[0]); 
         
-        execv(exec_path, args);
-        perror("execv cmd1 failed");
-        exit(EXIT_FAILURE);
+        if(execv(exec_path, args) == -1){
+            perror("execv cmd1 failed");
+            prev_status = FAIL;
+        } else prev_status = SUCCESS;
+        
     }
 
     if ((pid2 = fork()) == 0) {
@@ -376,11 +378,13 @@ void process_pipe(char *cmd) {
         
         char* args[MAX_ARGS];
         parse_arguments(cmd2, args); 
-        char* exec_path = construct_exec_path(args[0]);
+        char *exec_path = strchr(args[0], '/') ? args[0] : construct_exec_path(args[0]); 
+
         
-        execv(exec_path, args);
-        perror("execv cmd2 failed");
-        exit(EXIT_FAILURE);
+         if(execv(exec_path, args) == -1){
+            perror("execv cmd1 failed");
+            prev_status = FAIL;
+        } else prev_status = SUCCESS;
     }
 
     
@@ -416,11 +420,10 @@ void process_redirects(char *cmd) {
         token = strtok(NULL, " ");
     }
 
-    int inFD = -1, outFD = -1; // File descriptors for input and output files
+    int inFD = -1, outFD = -1; 
     char *lastInputFile = NULL;
     char *lastOutputFile = NULL;
 
-    // Handle the last input redirection
     while (!isEmpty(inputQueue)) {
         if (lastInputFile) free(lastInputFile);
         lastInputFile = dequeue(inputQueue);
@@ -429,7 +432,8 @@ void process_redirects(char *cmd) {
         inFD = open(lastInputFile, O_RDONLY);
         if (inFD < 0) {
             perror("Failed to open input file");
-            exit(EXIT_FAILURE);
+            prev_status = FAIL;
+            return;
         }
     }
 
@@ -442,7 +446,8 @@ void process_redirects(char *cmd) {
         outFD = open(lastOutputFile, O_WRONLY | O_CREAT | O_TRUNC, 0644);
         if (outFD < 0) {
             perror("Failed to open output file");
-            exit(EXIT_FAILURE);
+            prev_status = FAIL;
+            return;
         }
     }
 
@@ -467,15 +472,18 @@ void process_redirects(char *cmd) {
         }
         args[arg_count] = NULL; // Null-terminate the argument list
 
-        char *exec_path = construct_exec_path(args[0]); // Find the full path to the executable
+        char *exec_path = strchr(args[0], '/') ? args[0] : construct_exec_path(args[0]); 
         if (!exec_path) {
             perror("Executable not found");
-            exit(EXIT_FAILURE);
+            prev_status = FAIL;
+            return;
         }
 
-        execv(exec_path, args); // Execute the command
-        perror("execv failed"); // execv only returns on failure
-        exit(EXIT_FAILURE);
+        if(execv(exec_path, args) == -1){// Execute the command
+            perror("execv failed"); 
+            prev_status = FAIL;
+            return;
+        } else prev_status = SUCCESS;
     } else if (pid > 0) { // Parent process
         // Close file descriptors in the parent process, if they were opened
         if (inFD >= 0) close(inFD);
@@ -484,12 +492,18 @@ void process_redirects(char *cmd) {
         wait(NULL); // Wait for child process to finish
     } else {
         perror("Fork failed");
-        exit(EXIT_FAILURE);
+        prev_status = FAIL;
+        return;
     }
 
-    // Cleanup
-    if (lastInputFile) free(lastInputFile);
-    if (lastOutputFile) free(lastOutputFile);
+    if (lastInputFile){
+        free(lastInputFile);
+        prev_status = SUCCESS;
+    } 
+    if (lastOutputFile){
+        free(lastOutputFile);
+        prev_status = SUCCESS;
+    } 
 }
 
 
