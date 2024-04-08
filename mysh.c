@@ -7,15 +7,23 @@
 #include <fcntl.h>
 #include <sys/types.h>
 #include <sys/wait.h>
+#include "queue.h"
 
 #define BUFFER_SIZE 1024
+#define SUCCESS 1
+#define FAIL 0
 #define MAX_ARGS 128
 char *dirs[] = {"/usr/local/bin", "/usr/bin", "/bin"};
-
+int prev_status = 1; 
 void interaction()
 {
     printf("mysh> ");
     fflush(stdout);
+}
+
+int get_exit_status()
+{
+    return prev_status;
 }
 
 int contains_more_than_one_space(const char *str)
@@ -31,61 +39,97 @@ int contains_more_than_one_space(const char *str)
     return 0;
 }
 
-char* construct_exec_path(char* exec){
-    for(int i = 0; i < 3; i++){
-        char* exec_path = malloc(strlen(dirs[i]) + strlen(exec) + 2);
+char *construct_exec_path(char *exec)
+{
+    for (int i = 0; i < 3; i++)
+    {
+        char *exec_path = malloc(strlen(dirs[i]) + strlen(exec) + 2);
         strcpy(exec_path, dirs[i]);
         strcat(exec_path, "/");
         strcat(exec_path, exec);
-        printf("%s\n", exec_path);
-        if(access(exec_path, X_OK) == 0) return exec_path;
+        if (access(exec_path, X_OK) == 0)
+            return exec_path;
     }
-    return NULL; 
+    return NULL;
 }
 
-char **splitStringByVal(char *input, char* delimiter)
+char **splitStringByVal(const char *input, const char *delimiter)
 {
-    char **result = malloc(3 * sizeof(char *));
+    int capacity = 10;
+    char **result = malloc(capacity * sizeof(char *));
     if (result == NULL)
     {
         perror("Failed to allocate memory");
+        prev_status = FAIL;
         return NULL;
     }
 
-    char *delimiterPosition = strchr(input, *delimiter);
-
-    size_t firstLength = delimiterPosition - input;
-    result[0] = malloc(firstLength + 1); 
-    if (result[0] == NULL)
+    char *copy = strdup(input); // Make a copy of the input string
+    if (copy == NULL)
     {
         perror("Failed to allocate memory");
         free(result);
+        prev_status = FAIL;
         return NULL;
     }
-    strncpy(result[0], input, firstLength);
-    result[0][firstLength] = '\0'; 
 
-    const char *secondStart = delimiterPosition + 1;
-    result[1] = strdup(secondStart); 
-    if (result[1] == NULL)
+    char *token = strtok(copy, delimiter);
+    int count = 0;
+
+    // Tokenize the input string and store the tokens
+    while (token != NULL)
     {
-        perror("Failed to allocate memory");
-        free(result[0]);
-        free(result);
-        return NULL;
+        if (count >= capacity)
+        {
+            // If the result array is full, resize it
+            capacity *= 2;
+            char **temp = realloc(result, capacity * sizeof(char *));
+            if (temp == NULL)
+            {
+                perror("Failed to reallocate memory");
+                for (int i = 0; i < count; i++)
+                {
+                    free(result[i]);
+                }
+                free(result);
+                free(copy);
+                return NULL;
+            }
+            result = temp;
+        }
+
+        result[count] = strdup(token);
+        if (result[count] == NULL)
+        {
+            perror("Failed to allocate memory");
+            for (int i = 0; i < count; i++)
+            {
+                free(result[i]);
+            }
+            free(result);
+            free(copy);
+            prev_status = FAIL;
+            return NULL;
+        }
+
+        count++;
+        token = strtok(NULL, delimiter);
     }
 
-    result[2] = NULL;
+    free(copy);
 
     return result;
 }
 
-void removeAllWhitespaces(char* source) {
-    char* i = source;
-    char* j = source;
-    while (*j != '\0') {
+void removeAllWhitespaces(char *source)
+{
+    char *i = source;
+    char *j = source;
+    while (*j != '\0')
+    {
         *i = *j++;
-        if (!isspace(*i)) {
+        if (!isspace(*i))
+        {
             i++;
         }
     }
@@ -152,7 +196,7 @@ char *emulate_which(char *file_name)
     return NULL;
 }
 
-char *executeCommand(const char *cmd, int interactive)
+char *executeCommand(const char *cmd)
 {
     char *tempCmd = strdup(cmd);
     tempCmd[strcspn(tempCmd, "\n")] = 0;
@@ -273,203 +317,181 @@ char* process_wildcard(const char *command) {
     return result; 
 }
 
-// void getCommandByPipe(char *cmd, char **cmd1, char **cmd2) {
-//     char **pipes = splitStringByVal(cmd, "|");
-//     if (pipes != NULL) {
-//         cmd1 = cmd;
-//         cmd2 = pipes + 1;
-//     }
-// }
+void parse_arguments(const char* cmd, char** args) {
+    int i = 0;
+    char* token;
+    char* cmd_copy = strdup(cmd); 
 
+    
+    token = strtok(cmd_copy, " ");
+    while (token != NULL && i < MAX_ARGS - 1) { 
+        args[i++] = strdup(token); 
+        token = strtok(NULL, " "); 
+    }
+    args[i] = NULL; 
 
-void process_pipe(char *cmd, int interactive)
-{
+    free(cmd_copy); 
+}
 
-    char **pipes = splitStringByVal(cmd, "|");
-    char **cmd1, *cmd2;
+void process_pipe(char *cmd) {
+    char *cmd1, *cmd2;
     int pipefd[2];
-
-    
-
-    
     pid_t pid1, pid2;
 
-    getCommandByPipe(cmd, &cmd1, &cmd2);
-
     
+    char **split_cmds = splitStringByVal(cmd, "|");
+    if (!split_cmds || !split_cmds[0] || !split_cmds[1]) {
+        printf("Pipe command parsing error.\n");
+        return;
+    }
+    cmd1 = split_cmds[0];
+    cmd2 = split_cmds[1];
 
+    // Create a pipe
     if (pipe(pipefd) == -1) {
-        perror("pipe");
-        exit(EXIT_FAILURE);
+        perror("pipe failed");
+        exit(EXIT_FAILURE); 
     }
-    char *args[MAX_ARGS];
-
-    char* exec_path = construct_exec_path(args[0]);
-    // if(exec_path == NULL){
-    //     printf("Improper executable");
-    //     close();
-    //     exit(EXIT_FAILURE);
-    // }
-    // fork to execute first command
 
     
-    if((pid1 = fork()) == 0) {
+    if ((pid1 = fork()) == 0) {
+        
         dup2(pipefd[1], STDOUT_FILENO);
-        close(pipefd[0]);
-        close(pipefd[1]);
+        close(pipefd[0]); 
 
-        // char *args[MAX_ARGS];
-        executeCommand(cmd1, interactive);
+        
+        char* args[MAX_ARGS];
+        parse_arguments(cmd1, args); 
+        char* exec_path = construct_exec_path(args[0]);
+        
         execv(exec_path, args);
-        perror("execv cmd 1");
+        perror("execv cmd1 failed");
         exit(EXIT_FAILURE);
     }
 
-    // fork to execute second command 
-    if((pid1 = fork()) == 0) {
-        dup2(pipefd[1], STDOUT_FILENO);
-        close(pipefd[0]);
-        close(pipefd[1]);
+    if ((pid2 = fork()) == 0) {
+        dup2(pipefd[0], STDIN_FILENO);
+        close(pipefd[1]); 
 
-        // char *args[MAX_ARGS];
-        executeCommand(cmd2, interactive);
+        
+        char* args[MAX_ARGS];
+        parse_arguments(cmd2, args); 
+        char* exec_path = construct_exec_path(args[0]);
+        
         execv(exec_path, args);
-        perror("execv cmd 1");
+        perror("execv cmd2 failed");
         exit(EXIT_FAILURE);
     }
 
     
-    close(pipefd[0]); // Close both ends in the parent
+    close(pipefd[0]);
     close(pipefd[1]);
-    waitpid(pid1, NULL, 0); // Wait for both child processes
+    waitpid(pid1, NULL, 0);
     waitpid(pid2, NULL, 0);
+
     
+    free(split_cmds[0]);
+    free(split_cmds[1]);
+    free(split_cmds);
 }
-
-void process_stdout(char* file_to_redirect, char* exec_cmd){
-    int fd = open(file_to_redirect, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-    if (fd < 0) {
-        perror("Error opening file");
-        exit(EXIT_FAILURE);
-    }
-
-    char *args[MAX_ARGS];
-    char *token;
-    int arg_count = 0;
-
-    char *cmd_copy = strdup(exec_cmd);
-    if (!cmd_copy) {
-        perror("Failed to duplicate exec_cmd");
-        close(fd);
-        exit(EXIT_FAILURE);
-    }
-
-    token = strtok(cmd_copy, " ");
-    while (token != NULL && arg_count < MAX_ARGS - 1) {
-        args[arg_count++] = token;
-        token = strtok(NULL, " ");
-    }
-    args[arg_count] = NULL; 
-
-    char* exec_path = construct_exec_path(args[0]);
-    if(exec_path == NULL){
-        printf("Improper executable");
-        close(fd);
-        exit(EXIT_FAILURE);
-    }
-
-    pid_t pid = fork();
-
-    if (pid < 0) {
-        perror("Fork failed");
-        free(cmd_copy);
-        close(fd);
-        exit(EXIT_FAILURE);
-    }
-
-    if (pid == 0) {
-        dup2(fd, STDOUT_FILENO); 
-        close(fd); 
-
-        execv(exec_path, args); 
-
-        perror("execvp failed");
-        exit(EXIT_FAILURE);
-    } else {
-        close(fd); 
-        wait(NULL); 
-
-        free(cmd_copy); 
-        free(exec_path);
-    }
-}
-
-
-void process_stdin(char* file_to_redirect, char* exec_cmd) {
-    int in = open(file_to_redirect, O_RDONLY);
-    if (in < 0) {
-        perror("error opening file");
-        return;
-    }
-
-    char *args[MAX_ARGS];
-    char *token;
-    int arg_count = 0;
-
-    char *cmd_copy = strdup(exec_cmd);
-    if (!cmd_copy) {
-        perror("Failed to duplicate exec_cmd");
-        close(in);
-        return;
-    }
-
-    token = strtok(cmd_copy, " ");
-    while (token != NULL && arg_count < MAX_ARGS - 1) {
-        args[arg_count++] = token;
-        token = strtok(NULL, " ");
-    }
-    args[arg_count] = NULL; 
-
-    char* exec_path = construct_exec_path(args[0]);
-    if(exec_path == NULL){
-        printf("Improper executable");
-        close(in);
-        exit(EXIT_FAILURE);
-    }
-
-    pid_t pid = fork();
-    if (pid == 0) {
-        dup2(in, STDIN_FILENO); 
-        close(in); 
-
-        execvp(exec_path, args); 
-
-        perror("execvp");
-        exit(EXIT_FAILURE);
-    } else if (pid > 0) {
-        wait(NULL); 
-        close(in); 
-        free(cmd_copy); 
-        free(exec_path);
-    } else {
-        perror("fork");
-    }
-}
-
-
 
 /*
 foo < bar baz redirect std input of foo baz to bar
 quux *.txt > spam has globbing of *.txt and quux to spam
 */
-void process_redirects(char* cmd, char* delim, int interactive){
-    char** redirects = splitStringByVal(cmd, delim);
-    removeAllWhitespaces(redirects[1]);
-    char* file_to_redirect = get_first(redirects[1]);
-    char* exec_cmd = get_string_before_char(cmd, *delim);
-    if(strchr(delim, '>') != NULL) process_stdout(file_to_redirect, exec_cmd);
-    else process_stdin(file_to_redirect, exec_cmd);
+void process_redirects(char *cmd) {
+    struct Queue *inputQueue = createQueue(10);
+    struct Queue *outputQueue = createQueue(10);
+
+    // Tokenize and process the command
+    char *token = strtok(cmd, " ");
+    while (token != NULL) {
+        if (strcmp(token, "<") == 0) {
+            token = strtok(NULL, " ");
+            enqueue(inputQueue, token);
+        } else if (strcmp(token, ">") == 0) {
+            token = strtok(NULL, " ");
+            enqueue(outputQueue, token);
+        }
+        token = strtok(NULL, " ");
+    }
+
+    int inFD = -1, outFD = -1; // File descriptors for input and output files
+    char *lastInputFile = NULL;
+    char *lastOutputFile = NULL;
+
+    // Handle the last input redirection
+    while (!isEmpty(inputQueue)) {
+        if (lastInputFile) free(lastInputFile);
+        lastInputFile = dequeue(inputQueue);
+    }
+    if (lastInputFile) {
+        inFD = open(lastInputFile, O_RDONLY);
+        if (inFD < 0) {
+            perror("Failed to open input file");
+            exit(EXIT_FAILURE);
+        }
+    }
+
+    // Handle the last output redirection
+    while (!isEmpty(outputQueue)) {
+        if (lastOutputFile) free(lastOutputFile);
+        lastOutputFile = dequeue(outputQueue);
+    }
+    if (lastOutputFile) {
+        outFD = open(lastOutputFile, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if (outFD < 0) {
+            perror("Failed to open output file");
+            exit(EXIT_FAILURE);
+        }
+    }
+
+    // Fork and execute the command with redirections
+    pid_t pid = fork();
+    if (pid == 0) { // Child process
+        if (inFD >= 0) {
+            dup2(inFD, STDIN_FILENO);
+            close(inFD);
+        }
+        if (outFD >= 0) {
+            dup2(outFD, STDOUT_FILENO);
+            close(outFD);
+        }
+
+        // Prepare for execv
+        char *args[MAX_ARGS]; // Adjust size as needed
+        int arg_count = 0;
+        args[arg_count++] = strtok(cmd, " "); // First token is the command
+        while ((token = strtok(NULL, " ")) != NULL && arg_count < MAX_ARGS) {
+            args[arg_count++] = token; // Populate args with command arguments
+        }
+        args[arg_count] = NULL; // Null-terminate the argument list
+
+        char *exec_path = construct_exec_path(args[0]); // Find the full path to the executable
+        if (!exec_path) {
+            perror("Executable not found");
+            exit(EXIT_FAILURE);
+        }
+
+        execv(exec_path, args); // Execute the command
+        perror("execv failed"); // execv only returns on failure
+        exit(EXIT_FAILURE);
+    } else if (pid > 0) { // Parent process
+        // Close file descriptors in the parent process, if they were opened
+        if (inFD >= 0) close(inFD);
+        if (outFD >= 0) close(outFD);
+
+        wait(NULL); // Wait for child process to finish
+    } else {
+        perror("Fork failed");
+        exit(EXIT_FAILURE);
+    }
+
+    // Cleanup
+    if (lastInputFile) free(lastInputFile);
+    if (lastOutputFile) free(lastOutputFile);
 }
+
 
 
 void processInput(int fd, int interactive)
@@ -487,16 +509,15 @@ void processInput(int fd, int interactive)
         } 
 
         if (strchr(cmd, '|') != NULL)
-            process_pipe(cmd, interactive);
+            process_pipe(cmd);
             
         else if(strchr(cmd, '<') != NULL || strchr(cmd, '>') != NULL){
-            char* delim = (strchr(cmd, '<') != NULL) ? "<" : ">";
-            process_redirects(cmd, delim, interactive);
+            process_redirects(cmd);
         } else
         {
             while (cmd != NULL)
             {
-                char* command_res = executeCommand(cmd, interactive);
+                char* command_res = executeCommand(cmd);
                 if(command_res) printf("%s \n", command_res);
                 cmd = strtok(NULL, "\n");
             }
