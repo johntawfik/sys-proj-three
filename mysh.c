@@ -76,17 +76,16 @@ char **splitStringByVal(const char *input, const char *delimiter)
     char *token = strtok(copy, delimiter);
     int count = 0;
 
-    // Tokenize the input string and store the tokens
     while (token != NULL)
     {
         if (count >= capacity)
         {
-            // If the result array is full, resize it
             capacity *= 2;
             char **temp = realloc(result, capacity * sizeof(char *));
             if (temp == NULL)
             {
                 perror("Failed to reallocate memory");
+                prev_status = FAIL;
                 for (int i = 0; i < count; i++)
                 {
                     free(result[i]);
@@ -148,6 +147,7 @@ char *get_first(const char *input)
     if (firstWord == NULL)
     {
         perror("Failed to allocate memory");
+        prev_status = FAIL;
         return NULL;
     }
 
@@ -246,7 +246,8 @@ char *executeCommand(const char *cmd)
     }
     else
     {
-        system(tempCmd);
+        if(system(tempCmd) != 0) prev_status = FAIL;
+        else prev_status = SUCCESS;
         printf("\n");
     }
 
@@ -271,7 +272,7 @@ char* glob_pattern(const char *pattern) {
 
         result = malloc(total_length);
         if (result) {
-            *result = '\0'; // Initialize the string with empty content
+            *result = '\0'; 
             for (size_t i = 0; i < glob_result.gl_pathc; ++i) {
                 strcat(result, glob_result.gl_pathv[i]);
                 if (i < glob_result.gl_pathc - 1) strcat(result, " ");
@@ -407,7 +408,6 @@ void process_redirects(char *cmd) {
     struct Queue *inputQueue = createQueue(10);
     struct Queue *outputQueue = createQueue(10);
 
-    // Tokenize and process the command
     char *token = strtok(cmd, " ");
     while (token != NULL) {
         if (strcmp(token, "<") == 0) {
@@ -437,7 +437,6 @@ void process_redirects(char *cmd) {
         }
     }
 
-    // Handle the last output redirection
     while (!isEmpty(outputQueue)) {
         if (lastOutputFile) free(lastOutputFile);
         lastOutputFile = dequeue(outputQueue);
@@ -451,9 +450,8 @@ void process_redirects(char *cmd) {
         }
     }
 
-    // Fork and execute the command with redirections
     pid_t pid = fork();
-    if (pid == 0) { // Child process
+    if (pid == 0) { 
         if (inFD >= 0) {
             dup2(inFD, STDIN_FILENO);
             close(inFD);
@@ -463,14 +461,13 @@ void process_redirects(char *cmd) {
             close(outFD);
         }
 
-        // Prepare for execv
-        char *args[MAX_ARGS]; // Adjust size as needed
+        char *args[MAX_ARGS];
         int arg_count = 0;
-        args[arg_count++] = strtok(cmd, " "); // First token is the command
+        args[arg_count++] = strtok(cmd, " "); 
         while ((token = strtok(NULL, " ")) != NULL && arg_count < MAX_ARGS) {
-            args[arg_count++] = token; // Populate args with command arguments
+            args[arg_count++] = token; 
         }
-        args[arg_count] = NULL; // Null-terminate the argument list
+        args[arg_count] = NULL; 
 
         char *exec_path = strchr(args[0], '/') ? args[0] : construct_exec_path(args[0]); 
         if (!exec_path) {
@@ -479,17 +476,16 @@ void process_redirects(char *cmd) {
             return;
         }
 
-        if(execv(exec_path, args) == -1){// Execute the command
+        if(execv(exec_path, args) == -1){
             perror("execv failed"); 
             prev_status = FAIL;
             return;
         } else prev_status = SUCCESS;
-    } else if (pid > 0) { // Parent process
-        // Close file descriptors in the parent process, if they were opened
+    } else if (pid > 0) { 
         if (inFD >= 0) close(inFD);
         if (outFD >= 0) close(outFD);
 
-        wait(NULL); // Wait for child process to finish
+        wait(NULL); 
     } else {
         perror("Fork failed");
         prev_status = FAIL;
@@ -508,68 +504,85 @@ void process_redirects(char *cmd) {
 
 
 
-void processInput(int fd, int interactive)
+void processInput(char *cmd)
+{
+    if (strchr(cmd, '*') != NULL)
+    {
+        cmd = process_wildcard(cmd);
+    }
+
+    if (strncmp(cmd, "then", 4) == 0)
+    {
+        if (get_exit_status() == SUCCESS)
+            cmd += 5;
+        else
+            return;
+    }
+    if (strncmp(cmd, "else", 4) == 0)
+    {
+        if (get_exit_status() == FAIL)
+            cmd += 5;
+        else
+            return;
+    }
+    if (strchr(cmd, '|') != NULL)
+    {
+        process_pipe(cmd);
+    }
+    else if (strchr(cmd, '<') != NULL || strchr(cmd, '>') != NULL)
+    {
+        process_redirects(cmd);
+    }
+    else
+    {
+        char *token = strtok(cmd, "\n");
+        char *command_res = executeCommand(token);
+        if (command_res)
+            printf("%s \n", command_res);
+
+        token = strtok(NULL, "\n");
+    }
+}
+
+void readAndProcessInput(int fd, int interactive)
 {
     char buffer[BUFFER_SIZE];
     ssize_t bytesRead;
+
     while ((bytesRead = read(fd, buffer, BUFFER_SIZE - 1)) > 0)
     {
         buffer[bytesRead] = '\0';
         char *cmd = strtok(buffer, "\n");
-        // processSentence(cmd);
-        if (strchr(cmd, '*') != NULL){
-            cmd = process_wildcard(cmd);
-            printf("%s\n", cmd);
-        } 
 
-        if (strchr(cmd, '|') != NULL)
-            process_pipe(cmd);
-            
-        else if(strchr(cmd, '<') != NULL || strchr(cmd, '>') != NULL){
-            process_redirects(cmd);
-        } else
+        while (cmd != NULL)
         {
-            while (cmd != NULL)
-            {
-                char* command_res = executeCommand(cmd);
-                if(command_res) printf("%s \n", command_res);
-                cmd = strtok(NULL, "\n");
-            }
-            
+            processInput(cmd);
+            cmd = strtok(NULL, "\n");
+            if (interactive)
+                interaction();
         }
-        if (interactive)interaction();
     }
-    
 }
 
-int main(int argc, char *argv[])
-{
+int main(int argc, char *argv[]) {
     int fd = 0;
-    int isInteractive = isatty(STDIN_FILENO);
+    int isInteractive = 0;
 
-    if (isInteractive)
-    {
-        printf("Welcome to my shell!\n");
-    }
-
-    if (argc > 1)
-    {
+    if (argc > 1) {
         FILE *file = fopen(argv[1], "r");
-        if (!file)
-        {
+        if (!file) {
             perror("Error opening file");
             return 1;
         }
         fd = fileno(file);
+    } else {
+        isInteractive = 1;
+        printf("Welcome to my shell!\n");
+        interaction();
     }
 
-    if (isInteractive)
-    {
-        printf("mysh> ");
-        fflush(stdout);
-    }
 
-    processInput(fd, isInteractive);
+    readAndProcessInput(fd, isInteractive);
 
     return 0;
 }
